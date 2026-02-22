@@ -1,4 +1,4 @@
-    import os
+import os
 from telegram.ext import Updater, CommandHandler
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -14,7 +14,6 @@ def start(update, context):
 def main():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
-
     dp.add_handler(CommandHandler("start", start))
 
     print("Bot polling started...")
@@ -22,4 +21,4 @@ def main():
     updater.idle()
 
 if __name__ == "__main__":
-    main()
+    m
