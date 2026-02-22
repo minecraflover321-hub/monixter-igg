@@ -1,6 +1,6 @@
 from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes
-from config import OWNER_ID, MAX_USERS, MAX_USERNAMES
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from config import BOT_TOKEN, OWNER_ID, MAX_USERS, MAX_USERNAMES
 from database import load_db, save_db, is_subscription_active
 from datetime import datetime, timedelta
 
@@ -8,12 +8,10 @@ db = load_db()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-
     if user_id not in db["users"]:
         if len(db["users"]) >= MAX_USERS and int(user_id) != OWNER_ID:
             await update.message.reply_text("User limit reached.")
             return
-
         db["users"][user_id] = {
             "role": "owner" if int(user_id) == OWNER_ID else "user",
             "expiry": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
@@ -21,19 +19,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ban": []
         }
         save_db(db)
-
-    await update.message.reply_text("Bot Activated ✅")
+    await update.message.reply_text("🚀 Bot Activated ✅\nUse /addwatch [username] to start monitoring.")
 
 async def add_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-
     if not context.args:
         await update.message.reply_text("Usage: /addwatch username")
         return
-
+    
     username = context.args[0]
-    user = db["users"][user_id]
+    if user_id not in db["users"]:
+        await update.message.reply_text("Please /start the bot first.")
+        return
 
+    user = db["users"][user_id]
     if not is_subscription_active(user):
         await update.message.reply_text("Subscription expired.")
         return
@@ -45,5 +44,14 @@ async def add_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if username not in user["watch"]:
         user["watch"].append(username)
         save_db(db)
+    await update.message.reply_text(f"✅ {username} added to Watch List.")
 
-    await update.message.reply_text(f"{username} added to Watch List.")
+if __name__ == "__main__":
+    # Yaha commands register ho rahi hain
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("addwatch", add_watch))
+    
+    print("Bot is running...")
+    app.run_polling()
