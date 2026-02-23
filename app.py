@@ -12,36 +12,32 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
 
 DATA_FILE = "data.json"
-CHECK_INTERVAL = 300  # 5 min
-MAX_USERS = 300
+CHECK_INTERVAL = 300
 MAX_USER_WATCH = 20
 
 # ---------------- DATA ---------------- #
 
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"users": {}, "admins": []}
+        return {"users": {}}
     with open(DATA_FILE, "r") as f:
         return json.load(f)
 
-def save_data(data):
+def save_data(d):
     with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump(d, f)
 
 data = load_data()
 
-# ---------------- PERMISSIONS ---------------- #
+# ---------------- PERMISSION ---------------- #
 
-def is_owner(user_id):
-    return user_id == OWNER_ID
+def is_owner(uid):
+    return uid == OWNER_ID
 
-def is_admin(user_id):
-    return is_owner(user_id) or user_id in data["admins"]
-
-def is_approved(user_id):
-    if is_owner(user_id):
+def is_approved(uid):
+    if is_owner(uid):
         return True
-    user = data["users"].get(str(user_id))
+    user = data["users"].get(str(uid))
     if not user:
         return False
     if datetime.utcnow() > datetime.fromisoformat(user["expiry"]):
@@ -65,69 +61,67 @@ def check_instagram(username):
 # ---------------- COMMANDS ---------------- #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = """
-✨ WELCOME TO MONITOR BOT ✨
-━━━━━━━━━━━━━━━━━━━━
-Powered by: @proxyfxc
-
-📌 Commands:
-🔹 /watch username
-🔹 /ban username
-🔹 /status username
-🔹 /list
-🔹 /banlist
-━━━━━━━━━━━━━━━━━━━━
-"""
-    await update.message.reply_text(msg)
+    await update.message.reply_text(
+        "✨ WELCOME TO MONITOR BOT ✨\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Powered by: @proxyfxc\n\n"
+        "Commands:\n"
+        "/watch username\n"
+        "/ban username\n"
+        "/status username\n"
+        "/list\n"
+        "/banlist\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
 
 async def watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    uid = update.effective_user.id
 
-    if not is_approved(user_id):
-        return await update.message.reply_text("🚫 Subscription Required.")
+    if not is_approved(uid):
+        return await update.message.reply_text("🚫 Subscription Required")
 
     if not context.args:
         return await update.message.reply_text("Usage: /watch username")
 
     username = context.args[0].lower()
 
-    user_data = data["users"].setdefault(str(user_id), {
+    user = data["users"].setdefault(str(uid), {
         "watch": [],
         "ban": [],
-        "expiry": (datetime.utcnow() + timedelta(days=1)).isoformat()
+        "expiry": (datetime.utcnow() + timedelta(days=30)).isoformat()
     })
 
-    if not is_owner(user_id) and len(user_data["watch"]) >= MAX_USER_WATCH:
-        return await update.message.reply_text("⚠️ Watch limit reached (20).")
+    if not is_owner(uid) and len(user["watch"]) >= MAX_USER_WATCH:
+        return await update.message.reply_text("⚠️ Watch limit reached (20)")
 
-    if username not in user_data["watch"]:
-        user_data["watch"].append(username)
+    if username not in user["watch"]:
+        user["watch"].append(username)
         save_data(data)
 
-    await update.message.reply_text(f"✅ {username} added to Watch List.")
+    await update.message.reply_text(f"✅ {username} added to Watch List")
 
 async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    uid = update.effective_user.id
 
-    if not is_approved(user_id):
-        return await update.message.reply_text("🚫 Subscription Required.")
+    if not is_approved(uid):
+        return await update.message.reply_text("🚫 Subscription Required")
 
     if not context.args:
         return await update.message.reply_text("Usage: /ban username")
 
     username = context.args[0].lower()
 
-    user_data = data["users"].setdefault(str(user_id), {
+    user = data["users"].setdefault(str(uid), {
         "watch": [],
         "ban": [],
-        "expiry": (datetime.utcnow() + timedelta(days=1)).isoformat()
+        "expiry": (datetime.utcnow() + timedelta(days=30)).isoformat()
     })
 
-    if username not in user_data["ban"]:
-        user_data["ban"].append(username)
+    if username not in user["ban"]:
+        user["ban"].append(username)
         save_data(data)
 
-    await update.message.reply_text(f"📌 {username} added to Ban List.")
+    await update.message.reply_text(f"📌 {username} added to Ban List")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -141,47 +135,45 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif result == "active":
         await update.message.reply_text(f"✅ {username} is ACTIVE")
     else:
-        await update.message.reply_text("⚠️ Unable to fetch status.")
+        await update.message.reply_text("⚠️ Unable to fetch status")
 
 async def list_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = data["users"].get(str(user_id))
+    uid = update.effective_user.id
+    user = data["users"].get(str(uid))
     if not user or not user["watch"]:
-        return await update.message.reply_text("No watch list.")
-    text = "👀 Watch List:\n" + "\n".join(user["watch"])
-    await update.message.reply_text(text)
+        return await update.message.reply_text("No watch list")
+
+    await update.message.reply_text("👀 Watch List:\n" + "\n".join(user["watch"]))
 
 async def list_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = data["users"].get(str(user_id))
+    uid = update.effective_user.id
+    user = data["users"].get(str(uid))
     if not user or not user["ban"]:
-        return await update.message.reply_text("No ban list.")
-    text = "🚫 Ban List:\n" + "\n".join(user["ban"])
-    await update.message.reply_text(text)
+        return await update.message.reply_text("No ban list")
 
-# ---------------- MONITOR LOOP ---------------- #
+    await update.message.reply_text("🚫 Ban List:\n" + "\n".join(user["ban"]))
+
+# ---------------- MONITOR ---------------- #
 
 async def monitor(app):
     while True:
-        for user_id, user in data["users"].items():
+        for uid, user in data["users"].items():
 
-            # Watch → detect ban
             for username in list(user["watch"]):
                 result = check_instagram(username)
                 if result == "banned":
                     await app.bot.send_message(
-                        chat_id=int(user_id),
+                        chat_id=int(uid),
                         text=f"🚨 ALERT: {username} BANNED"
                     )
                     if username not in user["ban"]:
                         user["ban"].append(username)
 
-            # Ban → detect unban
             for username in list(user["ban"]):
                 result = check_instagram(username)
                 if result == "active":
                     await app.bot.send_message(
-                        chat_id=int(user_id),
+                        chat_id=int(uid),
                         text=f"🎉 {username} UNBANNED SUCCESSFULLY"
                     )
                     user["ban"].remove(username)
@@ -189,7 +181,7 @@ async def monitor(app):
         save_data(data)
         await asyncio.sleep(CHECK_INTERVAL)
 
-# ---------------- FLASK KEEP ALIVE ---------------- #
+# ---------------- FLASK ---------------- #
 
 flask_app = Flask(__name__)
 
@@ -202,7 +194,9 @@ def run_flask():
 
 # ---------------- MAIN ---------------- #
 
-async def main():
+if __name__ == "__main__":
+    Thread(target=run_flask).start()
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -214,8 +208,4 @@ async def main():
 
     app.create_task(monitor(app))
 
-    await app.run_polling()
-
-if __name__ == "__main__":
-    Thread(target=run_flask).start()
-    asyncio.run(main())
+    app.run_polling()
