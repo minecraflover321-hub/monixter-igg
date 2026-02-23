@@ -1,4 +1,5 @@
 python-telegram-bot==13.15
-requests
-Flask
+requests==2.31.0
+flask==2.3.3
+werkzeug==2.3.7
 
