@@ -4,11 +4,8 @@ import time
 import threading
 import requests
 from datetime import datetime, timedelta
-from flask import Flask, jsonify
 from telegram.ext import Updater, CommandHandler
-
-# Flask app for health check
-app = Flask(__name__)
+from flask import Flask  # <-- ADDED FLASK IMPORT
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
@@ -18,6 +15,23 @@ CHECK_INTERVAL = 300  # 5 Minutes
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN missing!")
+
+# ==============================
+# FLASK WEB SERVER (NEW)
+# ==============================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running smoothly! 🚀"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+def keep_alive():
+    t = threading.Thread(target=run_web, daemon=True)
+    t.start()
 
 # ==============================
 # DATA SYSTEM
@@ -66,8 +80,7 @@ def check_status(username):
             return "active"
 
         return "banned"
-    except Exception as e:
-        print(f"Error checking {username}: {e}")
+    except:
         return "unknown"
 
 # ==============================
@@ -205,10 +218,6 @@ def add_admin(update, context):
     if not is_owner(update.effective_user.id):
         return
 
-    if not context.args:
-        update.message.reply_text("Usage: /addadmin user_id")
-        return
-
     user_id = int(context.args[0])
     data = load_data()
 
@@ -220,10 +229,6 @@ def add_admin(update, context):
 
 def remove_admin(update, context):
     if not is_owner(update.effective_user.id):
-        return
-
-    if not context.args:
-        update.message.reply_text("Usage: /removeadmin user_id")
         return
 
     user_id = int(context.args[0])
@@ -240,112 +245,69 @@ def remove_admin(update, context):
 # ==============================
 def monitor_loop(updater):
     while True:
-        try:
-            data = load_data()
+        data = load_data()
 
-            for username in list(data["watch"].keys()):
-                status = check_status(username)
-                prev = data["watch"][username]["status"]
+        for username in list(data["watch"].keys()):
+            status = check_status(username)
+            prev = data["watch"][username]["status"]
 
-                if status == "unknown":
-                    continue
+            if status == "unknown":
+                continue
 
-                if status != prev:
-                    data["watch"][username]["confirm"] += 1
-                else:
-                    data["watch"][username]["confirm"] = 0
+            if status != prev:
+                data["watch"][username]["confirm"] += 1
+            else:
+                data["watch"][username]["confirm"] = 0
 
-                if data["watch"][username]["confirm"] >= 3:
-                    owner = data["watch"][username]["owner"]
+            if data["watch"][username]["confirm"] >= 3:
+                owner = data["watch"][username]["owner"]
 
-                    try:
-                        if status == "banned":
-                            updater.bot.send_message(
-                                owner,
-                                f"🚨 ALERT\n━━━━━━━━━━━━━━━━━━━━\n"
-                                f"Username: {username}\n"
-                                f"Status: BANNED ❌"
-                            )
-                        elif status == "active":
-                            updater.bot.send_message(
-                                owner,
-                                f"🎉 UPDATE\n━━━━━━━━━━━━━━━━━━━━\n"
-                                f"Username: {username}\n"
-                                f"Status: UNBANNED ✅"
-                            )
-                    except Exception as e:
-                        print(f"Error sending message to {owner}: {e}")
+                if status == "banned":
+                    updater.bot.send_message(
+                        owner,
+                        f"🚨 ALERT\n━━━━━━━━━━━━━━━━━━━━\n"
+                        f"Username: {username}\n"
+                        f"Status: BANNED ❌"
+                    )
+                elif status == "active":
+                    updater.bot.send_message(
+                        owner,
+                        f"🎉 UPDATE\n━━━━━━━━━━━━━━━━━━━━\n"
+                        f"Username: {username}\n"
+                        f"Status: UNBANNED ✅"
+                    )
 
-                    data["watch"][username]["status"] = status
-                    data["watch"][username]["confirm"] = 0
+                data["watch"][username]["status"] = status
+                data["watch"][username]["confirm"] = 0
 
-            save_data(data)
-        except Exception as e:
-            print(f"Error in monitor loop: {e}")
-        
+        save_data(data)
         time.sleep(CHECK_INTERVAL)
 
 # ==============================
-# FLASK ROUTES
+# MAIN
 # ==============================
-@app.route('/')
-def home():
-    return jsonify({
-        "status": "active",
-        "bot": "running",
-        "timestamp": datetime.utcnow().isoformat()
-    })
+def main():
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-@app.route('/health')
-def health():
-    return jsonify({"status": "healthy"})
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("watch", watch))
+    dp.add_handler(CommandHandler("check", check))
+    dp.add_handler(CommandHandler("list", list_users))
+    dp.add_handler(CommandHandler("remove", remove))
+    dp.add_handler(CommandHandler("approve", approve))
+    dp.add_handler(CommandHandler("addadmin", add_admin))
+    dp.add_handler(CommandHandler("removeadmin", remove_admin))
 
-@app.route('/stats')
-def stats():
-    data = load_data()
-    return jsonify({
-        "total_users": len(data["users"]),
-        "total_admins": len(data["admins"]),
-        "total_watched": len(data["watch"]),
-        "owner_id": OWNER_ID
-    })
+    threading.Thread(target=monitor_loop, args=(updater,), daemon=True).start()
 
-# ==============================
-# BOT THREAD FUNCTION
-# ==============================
-def run_bot():
-    """Run the Telegram bot"""
-    try:
-        updater = Updater(BOT_TOKEN, use_context=True)
-        dp = updater.dispatcher
+    # <-- ADDED KEEP_ALIVE CALL TO START FLASK
+    print("Starting Flask Web Server...")
+    keep_alive()
 
-        dp.add_handler(CommandHandler("start", start))
-        dp.add_handler(CommandHandler("watch", watch))
-        dp.add_handler(CommandHandler("check", check))
-        dp.add_handler(CommandHandler("list", list_users))
-        dp.add_handler(CommandHandler("remove", remove))
-        dp.add_handler(CommandHandler("approve", approve))
-        dp.add_handler(CommandHandler("addadmin", add_admin))
-        dp.add_handler(CommandHandler("removeadmin", remove_admin))
+    print("Bot polling started...")
+    updater.start_polling()
+    updater.idle()
 
-        # Start monitor thread
-        threading.Thread(target=monitor_loop, args=(updater,), daemon=True).start()
-
-        print("Bot polling started...")
-        updater.start_polling()
-        updater.idle()
-    except Exception as e:
-        print(f"Error in bot thread: {e}")
-
-# ==============================
-# MAIN ENTRY POINT
-# ==============================
 if __name__ == "__main__":
-    # Start bot in a separate thread
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    
-    # Run Flask app (Render will call this)
-    port = int(os.environ.get('PORT', 8080))
-    print(f"Starting Flask server on port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    main()
