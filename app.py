@@ -16,15 +16,18 @@ def home():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot working properly ✅")
 
-def run_bot():
-    import asyncio
-    asyncio.run(bot_main())
+def start_flask():
+    app.run(host="0.0.0.0", port=PORT)
 
-async def bot_main():
+def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
-    await application.run_polling()
+
+    # Flask alag thread me
+    threading.Thread(target=start_flask).start()
+
+    # Telegram bot main thread me
+    application.run_polling()
 
 if __name__ == "__main__":
-    threading.Thread(target=run_bot).start()
-    app.run(host="0.0.0.0", port=PORT)
+    main()
