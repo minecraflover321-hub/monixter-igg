@@ -1,208 +1,310 @@
 import os
 import json
-import asyncio
+import time
+import threading
 import requests
-from flask import Flask
-from threading import Thread
 from datetime import datetime, timedelta
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import Updater, CommandHandler
+from flask import Flask  # Flask import kiya gaya
 
+# ==============================
+# FLASK SERVER (KEEP-ALIVE)
+# ==============================
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is Running!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+
+# ==============================
+# CONFIG & DATA
+# ==============================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID"))
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 DATA_FILE = "data.json"
-CHECK_INTERVAL = 300
-MAX_USER_WATCH = 20
+CHECK_INTERVAL = 300  # 5 Minutes
 
-# ---------------- DATA ---------------- #
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN missing!")
 
+# ==============================
+# DATA SYSTEM
+# ==============================
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"users": {}}
+        return {"users": {}, "admins": [], "watch": {}}
     with open(DATA_FILE, "r") as f:
-        try:
-            return json.load(f)
-        except:
-            return {"users": {}}
+        return json.load(f)
 
-def save_data(d):
+def save_data(data):
     with open(DATA_FILE, "w") as f:
-        json.dump(d, f)
+        json.dump(data, f)
 
-data = load_data()
+# ==============================
+# ROLE SYSTEM
+# ==============================
+def is_owner(user_id):
+    return user_id == OWNER_ID
 
-# ---------------- PERMISSION ---------------- #
+def is_admin(user_id):
+    data = load_data()
+    return user_id == OWNER_ID or user_id in data["admins"]
 
-def is_owner(uid):
-    return uid == OWNER_ID
-
-def is_approved(uid):
-    if is_owner(uid):
+def is_allowed(user_id):
+    if is_admin(user_id):
         return True
-    user = data["users"].get(str(uid))
-    if not user:
+    data = load_data()
+    if str(user_id) not in data["users"]:
         return False
-    try:
-        if datetime.utcnow() > datetime.fromisoformat(user["expiry"]):
-            return False
-    except:
-        return False
-    return True
+    expiry = datetime.fromisoformat(data["users"][str(user_id)])
+    return datetime.utcnow() < expiry
 
-# ---------------- INSTAGRAM CHECK ---------------- #
-
-def check_instagram(username):
+# ==============================
+# STATUS CHECKER
+# ==============================
+def check_status(username):
     try:
         url = f"https://insta-profile-info-api.vercel.app/api/instagram.php?username={username}"
         r = requests.get(url, timeout=10)
+
         if r.status_code != 200:
-            return None
-        if "User not found" in r.text:
-            return "banned"
-        return "active"
+            return "unknown"
+
+        if '"username"' in r.text:
+            return "active"
+
+        return "banned"
     except:
-        return None
+        return "unknown"
 
-# ---------------- COMMANDS ---------------- #
+# ==============================
+# UI MESSAGES
+# ==============================
+WELCOME_MSG = """
+✨ WELCOME TO MONITOR BOT ✨
+━━━━━━━━━━━━━━━━━━━━
+Powered by: @proxyfxc
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "✨ WELCOME TO MONITOR BOT ✨\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "Powered by: @proxyfxc\n\n"
-        "Commands:\n"
-        "/watch username\n"
-        "/ban username\n"
-        "/status username\n"
-        "/list\n"
-        "/banlist\n"
-        "━━━━━━━━━━━━━━━━━━━━"
+I provide 24/7 professional Instagram monitoring.
+
+📍 Commands:
+🔹 /watch <username>
+🔹 /check <username>
+🔹 /list
+🔹 /remove <username>
+
+👑 Admin:
+🔸 /approve <user_id> <days>
+🔸 /addadmin <user_id>
+🔸 /removeadmin <user_id>
+━━━━━━━━━━━━━━━━━━━━
+"""
+
+# ==============================
+# COMMANDS
+# ==============================
+def start(update, context):
+    update.message.reply_text(WELCOME_MSG)
+
+def watch(update, context):
+    user_id = update.effective_user.id
+
+    if not is_allowed(user_id):
+        update.message.reply_text("❌ Subscription required.")
+        return
+
+    if not context.args:
+        update.message.reply_text("Usage: /watch username")
+        return
+
+    username = context.args[0].lower()
+    data = load_data()
+
+    if not is_admin(user_id):
+        user_watch = [u for u in data["watch"] if data["watch"][u]["owner"] == user_id]
+        if len(user_watch) >= 20:
+            update.message.reply_text("⚠ Limit reached (20 usernames max).")
+            return
+
+    data["watch"][username] = {
+        "status": "unknown",
+        "owner": user_id,
+        "confirm": 0
+    }
+
+    save_data(data)
+
+    update.message.reply_text(
+        f"✅ USER ADDED TO WATCH\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"Username: {username}\n"
+        f"Status: Monitoring started"
     )
 
-async def watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if not is_approved(uid):
-        return await update.message.reply_text("🚫 Subscription Required")
+def check(update, context):
     if not context.args:
-        return await update.message.reply_text("Usage: /watch username")
-    username = context.args[0].lower()
-    user = data["users"].setdefault(str(uid), {
-        "watch": [],
-        "ban": [],
-        "expiry": (datetime.utcnow() + timedelta(days=30)).isoformat()
-    })
-    if not is_owner(uid) and len(user["watch"]) >= MAX_USER_WATCH:
-        return await update.message.reply_text("⚠️ Watch limit reached (20)")
-    if username not in user["watch"]:
-        user["watch"].append(username)
-        save_data(data)
-    await update.message.reply_text(f"✅ {username} added to Watch List")
+        update.message.reply_text("Usage: /check username")
+        return
 
-async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if not is_approved(uid):
-        return await update.message.reply_text("🚫 Subscription Required")
-    if not context.args:
-        return await update.message.reply_text("Usage: /ban username")
     username = context.args[0].lower()
-    user = data["users"].setdefault(str(uid), {
-        "watch": [],
-        "ban": [],
-        "expiry": (datetime.utcnow() + timedelta(days=30)).isoformat()
-    })
-    if username not in user["ban"]:
-        user["ban"].append(username)
-        save_data(data)
-    await update.message.reply_text(f"📌 {username} added to Ban List")
+    status = check_status(username)
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    emoji = "🟢" if status == "active" else "🔴" if status == "banned" else "⚪"
+
+    update.message.reply_text(
+        f"{emoji} LIVE STATUS REPORT\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"Username: {username}\n"
+        f"Status: {status.upper()}"
+    )
+
+def list_users(update, context):
+    user_id = update.effective_user.id
+    data = load_data()
+
+    user_watch = [u for u in data["watch"] if data["watch"][u]["owner"] == user_id]
+
+    if not user_watch:
+        update.message.reply_text("📭 Your watchlist is empty.")
+        return
+
+    formatted = "\n".join([f"• {u}" for u in user_watch])
+
+    update.message.reply_text(
+        f"📋 YOUR WATCHLIST\n━━━━━━━━━━━━━━━━━━━━\n{formatted}"
+    )
+
+def remove(update, context):
     if not context.args:
-        return await update.message.reply_text("Usage: /status username")
+        update.message.reply_text("Usage: /remove username")
+        return
+
     username = context.args[0].lower()
-    result = check_instagram(username)
-    if result == "banned":
-        await update.message.reply_text(f"🚫 {username} is BANNED")
-    elif result == "active":
-        await update.message.reply_text(f"✅ {username} is ACTIVE")
+    data = load_data()
+
+    if username in data["watch"]:
+        del data["watch"][username]
+        save_data(data)
+        update.message.reply_text(f"❌ Removed {username} from watchlist.")
     else:
-        await update.message.reply_text("⚠️ Unable to fetch status")
+        update.message.reply_text("Username not found.")
 
-async def list_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    user = data["users"].get(str(uid))
-    if not user or not user["watch"]:
-        return await update.message.reply_text("No watch list")
-    await update.message.reply_text("👀 Watch List:\n" + "\n".join(user["watch"]))
+# ==============================
+# ADMIN COMMANDS
+# ==============================
+def approve(update, context):
+    if not is_admin(update.effective_user.id):
+        return
 
-async def list_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    user = data["users"].get(str(uid))
-    if not user or not user["ban"]:
-        return await update.message.reply_text("No ban list")
-    await update.message.reply_text("🚫 Ban List:\n" + "\n".join(user["ban"]))
+    if len(context.args) != 2:
+        update.message.reply_text("Usage: /approve user_id days")
+        return
 
-# ---------------- MONITOR ---------------- #
+    user_id = context.args[0]
+    days = int(context.args[1])
 
-async def monitor(application):
-    while True:
-        # Loop over a copy to avoid dictionary size change issues
-        uids = list(data["users"].keys())
-        for uid in uids:
-            user = data["users"][uid]
-            # Watch check
-            for username in list(user.get("watch", [])):
-                result = check_instagram(username)
-                if result == "banned":
-                    try:
-                        await application.bot.send_message(chat_id=int(uid), text=f"🚨 ALERT: {username} BANNED")
-                        if username not in user.get("ban", []):
-                            user.setdefault("ban", []).append(username)
-                    except: pass
-            # Ban check
-            for username in list(user.get("ban", [])):
-                result = check_instagram(username)
-                if result == "active":
-                    try:
-                        await application.bot.send_message(chat_id=int(uid), text=f"🎉 {username} UNBANNED SUCCESSFULLY")
-                        user["ban"].remove(username)
-                    except: pass
+    data = load_data()
+    expiry = datetime.utcnow() + timedelta(days=days)
+    data["users"][user_id] = expiry.isoformat()
+    save_data(data)
+
+    update.message.reply_text(f"✅ User {user_id} approved for {days} days.")
+
+def add_admin(update, context):
+    if not is_owner(update.effective_user.id):
+        return
+
+    user_id = int(context.args[0])
+    data = load_data()
+
+    if user_id not in data["admins"]:
+        data["admins"].append(user_id)
         save_data(data)
-        await asyncio.sleep(CHECK_INTERVAL)
 
-# ---------------- FLASK ---------------- #
+    update.message.reply_text(f"👑 {user_id} promoted to ADMIN.")
 
-flask_app = Flask(__name__)
+def remove_admin(update, context):
+    if not is_owner(update.effective_user.id):
+        return
 
-@flask_app.route("/")
-def home():
-    return "Bot Running"
+    user_id = int(context.args[0])
+    data = load_data()
 
-def run_flask():
-    # Render uses port 10000 by default, keeping your port
-    flask_app.run(host="0.0.0.0", port=10000)
+    if user_id in data["admins"]:
+        data["admins"].remove(user_id)
+        save_data(data)
 
-# ---------------- MAIN ---------------- #
+    update.message.reply_text(f"❌ {user_id} removed from ADMIN.")
+
+# ==============================
+# MONITOR ENGINE
+# ==============================
+def monitor_loop(updater):
+    while True:
+        data = load_data()
+
+        for username in list(data["watch"].keys()):
+            status = check_status(username)
+            prev = data["watch"][username]["status"]
+
+            if status == "unknown":
+                continue
+
+            if status != prev:
+                data["watch"][username]["confirm"] += 1
+            else:
+                data["watch"][username]["confirm"] = 0
+
+            if data["watch"][username]["confirm"] >= 3:
+                owner = data["watch"][username]["owner"]
+
+                if status == "banned":
+                    updater.bot.send_message(
+                        owner,
+                        f"🚨 ALERT\n━━━━━━━━━━━━━━━━━━━━\n"
+                        f"Username: {username}\n"
+                        f"Status: BANNED ❌"
+                    )
+                elif status == "active":
+                    updater.bot.send_message(
+                        owner,
+                        f"🎉 UPDATE\n━━━━━━━━━━━━━━━━━━━━\n"
+                        f"Username: {username}\n"
+                        f"Status: UNBANNED ✅"
+                    )
+
+                data["watch"][username]["status"] = status
+                data["watch"][username]["confirm"] = 0
+
+        save_data(data)
+        time.sleep(CHECK_INTERVAL)
+
+# ==============================
+# MAIN
+# ==============================
+def main():
+    # Flask ko separate thread mein start karein
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("watch", watch))
+    dp.add_handler(CommandHandler("check", check))
+    dp.add_handler(CommandHandler("list", list_users))
+    dp.add_handler(CommandHandler("remove", remove))
+    dp.add_handler(CommandHandler("approve", approve))
+    dp.add_handler(CommandHandler("addadmin", add_admin))
+    dp.add_handler(CommandHandler("removeadmin", remove_admin))
+
+    threading.Thread(target=monitor_loop, args=(updater,), daemon=True).start()
+
+    print("Bot polling started...")
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
-    # Start Flask in background
-    Thread(target=run_flask, daemon=True).start()
-
-    # Setup Application
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("watch", watch))
-    application.add_handler(CommandHandler("ban", ban))
-    application.add_handler(CommandHandler("status", status))
-    application.add_handler(CommandHandler("list", list_watch))
-    application.add_handler(CommandHandler("banlist", list_ban))
-
-    # Correct way to add a background task in PTB v20
-    async def post_init(app):
-        asyncio.create_task(monitor(app))
-
-    application.post_init = post_init
-    
-    # Run bot
-    application.run_polling()
+    main()
